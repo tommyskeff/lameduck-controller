@@ -1,7 +1,6 @@
 {{- if .Values.webhook.enabled }}
 {{- $service := include "lameduck.webhookService" . }}
 {{- $secretName := include "lameduck.webhookSecret" . }}
-{{- $caBundle := "" }}
 {{- if .Values.webhook.certManager.enabled }}
 {{- if not .Values.webhook.certManager.issuerRef }}
 apiVersion: cert-manager.io/v1
@@ -35,21 +34,6 @@ spec:
     name: {{ include "lameduck.fullname" . }}-selfsigned
     {{- end }}
 {{- else }}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName }}
-{{- $crt := "" }}
-{{- $key := "" }}
-{{- if and $existing (index ($existing.data | default dict) "ca.crt") }}
-{{- $caBundle = index $existing.data "ca.crt" }}
-{{- $crt = index $existing.data "tls.crt" }}
-{{- $key = index $existing.data "tls.key" }}
-{{- else }}
-{{- $ca := genCA (printf "%s-ca" (include "lameduck.fullname" .)) 3650 }}
-{{- $dns := list (printf "%s.%s.svc" $service .Release.Namespace) (printf "%s.%s.svc.cluster.local" $service .Release.Namespace) }}
-{{- $cert := genSignedCert (index $dns 0) nil $dns 3650 $ca }}
-{{- $caBundle = $ca.Cert | b64enc }}
-{{- $crt = $cert.Cert | b64enc }}
-{{- $key = $cert.Key | b64enc }}
-{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -57,11 +41,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "lameduck.labels" . | nindent 4 }}
-type: kubernetes.io/tls
-data:
-  ca.crt: {{ $caBundle }}
-  tls.crt: {{ $crt }}
-  tls.key: {{ $key }}
+type: Opaque
 {{- end }}
 ---
 {{- $config := .Files.Get "files/webhooks.yaml" | fromYaml }}
@@ -70,9 +50,6 @@ data:
 {{- $webhook := . }}
 {{- $_ := set $webhook.clientConfig.service "name" $service }}
 {{- $_ := set $webhook.clientConfig.service "namespace" $.Release.Namespace }}
-{{- if $caBundle }}
-{{- $_ := set $webhook.clientConfig "caBundle" $caBundle }}
-{{- end }}
 {{- if hasPrefix "pod-" $webhook.name }}
 {{- $_ := set $webhook "failurePolicy" $.Values.webhook.podFailurePolicy }}
 {{- end }}

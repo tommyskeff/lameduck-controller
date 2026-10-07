@@ -53,6 +53,12 @@ spec:
         {{- if .Values.webhook.enabled }}
         - --webhook-port=9443
         - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+        {{- if not .Values.webhook.certManager.enabled }}
+        - --webhook-cert-secret={{ include "lameduck.webhookSecret" . }}
+        - --webhook-service={{ include "lameduck.webhookService" . }}
+        - --webhook-configuration={{ include "lameduck.fullname" . }}
+        - --namespace={{ .Release.Namespace }}
+        {{- end }}
         {{- else }}
         - --webhook-port=-1
         {{- end }}
