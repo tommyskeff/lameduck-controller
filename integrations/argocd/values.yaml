@@ -1,0 +1,87 @@
+configs:
+  params:
+    controller.diff.server.side: "true"
+  cm:
+    resource.customizations.health.lameduck.tommyjs.dev_DrainSet: |
+      local hs = { status = "Progressing", message = "Waiting for the rollout to be observed" }
+      if obj.status == nil or obj.status.observedGeneration ~= obj.metadata.generation then
+        return hs
+      end
+      local available = nil
+      local progressing = nil
+      for _, condition in ipairs(obj.status.conditions or {}) do
+        if condition.type == "Available" then
+          available = condition
+        elseif condition.type == "Progressing" then
+          progressing = condition
+        end
+      end
+      if progressing ~= nil and progressing.reason == "Paused" then
+        hs.status = "Suspended"
+        hs.message = "Rollout is paused"
+        return hs
+      end
+      if progressing ~= nil and progressing.status == "False" then
+        hs.status = "Degraded"
+        hs.message = progressing.message ~= "" and progressing.message or progressing.reason
+        return hs
+      end
+      local desired = obj.spec.replicas or 1
+      local updated = obj.status.updatedAvailableReplicas or 0
+      if available ~= nil and available.status == "True" and updated >= desired then
+        hs.status = "Healthy"
+        hs.message = ""
+        return hs
+      end
+      hs.message = updated .. " of " .. desired .. " updated pods available"
+      return hs
+    resource.customizations.actions.lameduck.tommyjs.dev_DrainSet: |
+      discovery.lua: |
+        local paused = obj.spec.paused == true
+        return {
+          restart = { iconClass = "fa fa-fw fa-redo" },
+          pause = { iconClass = "fa fa-fw fa-pause-circle", disabled = paused },
+          resume = { iconClass = "fa fa-fw fa-play-circle", disabled = not paused },
+        }
+      definitions:
+        - name: restart
+          action.lua: |
+            obj.spec.template.metadata = obj.spec.template.metadata or {}
+            local annotations = obj.spec.template.metadata.annotations or {}
+            local count = tonumber(annotations["kubectl.kubernetes.io/restartedAt"] or "0") or 0
+            annotations["kubectl.kubernetes.io/restartedAt"] = tostring(count + 1)
+            obj.spec.template.metadata.annotations = annotations
+            return obj
+        - name: pause
+          action.lua: |
+            obj.spec.paused = true
+            return obj
+        - name: resume
+          action.lua: |
+            obj.spec.paused = false
+            return obj
+    resource.customizations.actions.Pod: |
+      discovery.lua: |
+        local labels = obj.metadata.labels or {}
+        local annotations = obj.metadata.annotations or {}
+        local actions = {}
+        if labels["lameduck.tommyjs.dev/set"] ~= nil then
+          local draining = labels["lameduck.tommyjs.dev/phase"] == "Draining"
+          actions["drain"] = {
+            iconClass = "fa fa-fw fa-sign-out-alt",
+            disabled = draining or annotations["lameduck.tommyjs.dev/drain"] ~= nil,
+          }
+          actions["terminate-now"] = { iconClass = "fa fa-fw fa-power-off" }
+        end
+        return actions
+      definitions:
+        - name: drain
+          action.lua: |
+            obj.metadata.annotations = obj.metadata.annotations or {}
+            obj.metadata.annotations["lameduck.tommyjs.dev/drain"] = "Manual"
+            return obj
+        - name: terminate-now
+          action.lua: |
+            obj.metadata.annotations = obj.metadata.annotations or {}
+            obj.metadata.annotations["lameduck.tommyjs.dev/terminate"] = "now"
+            return obj
