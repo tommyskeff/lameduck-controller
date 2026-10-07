@@ -1,0 +1,10 @@
+{{- if .Values.crd.install }}
+{{- $crd := .Files.Get "files/crd.yaml" | fromYaml }}
+{{- $annotations := default dict $crd.metadata.annotations }}
+{{- if .Values.crd.keep }}
+{{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+{{- end }}
+{{- $_ := set $crd.metadata "annotations" $annotations }}
+{{- $_ := set $crd.metadata "labels" (include "lameduck.labels" . | fromYaml) }}
+{{ toYaml $crd }}
+{{- end }}

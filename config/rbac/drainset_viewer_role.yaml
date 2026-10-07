@@ -1,0 +1,23 @@
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: lameduck
+    app.kubernetes.io/managed-by: kustomize
+  name: drainset-viewer-role
+rules:
+- apiGroups:
+  - lameduck.tommyjs.dev
+  resources:
+  - drainsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - lameduck.tommyjs.dev
+  resources:
+  - drainsets/status
+  verbs:
+  - get

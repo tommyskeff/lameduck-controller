@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lameduck.fullname" . }}-fleet
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: grpc
+    port: 9500
+    targetPort: fleet
+  selector:
+    {{- include "lameduck.selectorLabels" . | nindent 4 }}
+{{- if .Values.webhook.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lameduck.webhookService" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: webhook
+  selector:
+    {{- include "lameduck.selectorLabels" . | nindent 4 }}
+{{- end }}
+{{- if .Values.metrics.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lameduck.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+spec:
+  ports:
+  - name: https
+    port: 8443
+    targetPort: metrics
+  selector:
+    {{- include "lameduck.selectorLabels" . | nindent 4 }}
+{{- end }}

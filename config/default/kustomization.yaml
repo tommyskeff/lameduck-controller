@@ -1,0 +1,107 @@
+namespace: lameduck-system
+namePrefix: lameduck-
+
+resources:
+- ../crd
+- ../rbac
+- ../manager
+- ../webhook
+- ../certmanager
+- metrics_service.yaml
+
+patches:
+- path: manager_metrics_patch.yaml
+  target:
+    kind: Deployment
+- path: manager_webhook_patch.yaml
+  target:
+    kind: Deployment
+
+replacements:
+- source:
+    kind: Service
+    version: v1
+    name: webhook-service
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: Certificate
+      group: cert-manager.io
+      version: v1
+      name: serving-cert
+    fieldPaths:
+    - .spec.dnsNames.0
+    - .spec.dnsNames.1
+    options:
+      delimiter: '.'
+      index: 0
+      create: true
+- source:
+    kind: Service
+    version: v1
+    name: webhook-service
+    fieldPath: .metadata.namespace
+  targets:
+  - select:
+      kind: Certificate
+      group: cert-manager.io
+      version: v1
+      name: serving-cert
+    fieldPaths:
+    - .spec.dnsNames.0
+    - .spec.dnsNames.1
+    options:
+      delimiter: '.'
+      index: 1
+      create: true
+- source:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert
+    fieldPath: .metadata.namespace
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: '/'
+      index: 0
+      create: true
+- source:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: ValidatingWebhookConfiguration
+    fieldPaths:
+    - .metadata.annotations.[cert-manager.io/inject-ca-from]
+    options:
+      delimiter: '/'
+      index: 1
+      create: true
+- source:
+    kind: Service
+    version: v1
+    name: fleet
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - .spec.template.spec.containers.[name=manager].env.[name=FLEET_SERVICE].value
+- source:
+    kind: Deployment
+    name: controller-manager
+    fieldPath: .spec.template.spec.containers.[name=manager].image
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - .spec.template.spec.containers.[name=manager].env.[name=SIDECAR_IMAGE].value

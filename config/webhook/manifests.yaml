@@ -1,0 +1,64 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-lameduck-tommyjs-dev-v1alpha1-drainset
+  failurePolicy: Fail
+  name: drainset.lameduck.tommyjs.dev
+  rules:
+  - apiGroups:
+    - lameduck.tommyjs.dev
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - drainsets
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-pod-delete
+  failurePolicy: Ignore
+  name: pod-delete.lameduck.tommyjs.dev
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - DELETE
+    resources:
+    - pods
+  sideEffects: NoneOnDryRun
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-pod-eviction
+  failurePolicy: Ignore
+  name: pod-eviction.lameduck.tommyjs.dev
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods/eviction
+  sideEffects: NoneOnDryRun

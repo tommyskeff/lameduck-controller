@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package tommyjs.lameduck.v1;
+
+import "tommyjs/lameduck/v1/state.proto";
+
+option go_package = "github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1;lameduckv1";
+option java_multiple_files = true;
+option java_package = "dev.tommyjs.lameduck.v1";
+
+service FleetService {
+  rpc Connect(stream ConnectRequest) returns (stream ConnectResponse);
+}
+
+message ConnectRequest {
+  oneof message {
+    LoadReport load = 1;
+    DrainedReport drained = 2;
+  }
+}
+
+message LoadReport {
+  int64 load = 1;
+}
+
+message DrainedReport {}
+
+message ConnectResponse {
+  oneof message {
+    PodState state = 1;
+  }
+}

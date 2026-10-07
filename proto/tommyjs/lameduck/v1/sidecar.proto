@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package tommyjs.lameduck.v1;
+
+import "tommyjs/lameduck/v1/state.proto";
+
+option go_package = "github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1;lameduckv1";
+option java_multiple_files = true;
+option java_package = "dev.tommyjs.lameduck.v1";
+
+service SidecarService {
+  rpc GetState(GetStateRequest) returns (GetStateResponse);
+  rpc WatchState(WatchStateRequest) returns (stream WatchStateResponse);
+  rpc SetLoad(SetLoadRequest) returns (SetLoadResponse);
+  rpc MarkDrained(MarkDrainedRequest) returns (MarkDrainedResponse);
+}
+
+message GetStateRequest {}
+
+message GetStateResponse {
+  PodState state = 1;
+}
+
+message WatchStateRequest {}
+
+message WatchStateResponse {
+  PodState state = 1;
+}
+
+message SetLoadRequest {
+  int64 load = 1;
+}
+
+message SetLoadResponse {}
+
+message MarkDrainedRequest {}
+
+message MarkDrainedResponse {}

@@ -1,0 +1,38 @@
+image:
+  repository: ghcr.io/tommyskeff/lameduck-controller
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+sidecar:
+  image: ""
+  address: 127.0.0.1:9450
+
+crd:
+  install: true
+  keep: true
+
+webhook:
+  enabled: true
+  podFailurePolicy: Ignore
+  certManager:
+    enabled: false
+    issuerRef: {}
+
+metrics:
+  enabled: true
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

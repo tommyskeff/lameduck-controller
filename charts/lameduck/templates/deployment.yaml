@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lameduck.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "lameduck.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "lameduck.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "lameduck.serviceAccount" . }}
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: manager
+        image: {{ include "lameduck.image" . }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address={{ if .Values.metrics.enabled }}:8443{{ else }}0{{ end }}
+        - --fleet-bind-address=:9500
+        - --fleet-address={{ include "lameduck.fullname" . }}-fleet.{{ .Release.Namespace }}.svc:9500
+        - --sidecar-image={{ default (include "lameduck.image" .) .Values.sidecar.image }}
+        - --sidecar-address={{ .Values.sidecar.address }}
+        - --controller-username=system:serviceaccount:{{ .Release.Namespace }}:{{ include "lameduck.serviceAccount" . }}
+        {{- if .Values.webhook.enabled }}
+        - --webhook-port=9443
+        - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+        {{- else }}
+        - --webhook-port=-1
+        {{- end }}
+        ports:
+        - name: health
+          containerPort: 8081
+        - name: fleet
+          containerPort: 9500
+        {{- if .Values.webhook.enabled }}
+        - name: webhook
+          containerPort: 9443
+        {{- end }}
+        {{- if .Values.metrics.enabled }}
+        - name: metrics
+          containerPort: 8443
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        {{- if .Values.webhook.enabled }}
+        volumeMounts:
+        - name: webhook-cert
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+        {{- end }}
+      {{- if .Values.webhook.enabled }}
+      volumes:
+      - name: webhook-cert
+        secret:
+          secretName: {{ include "lameduck.webhookSecret" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
