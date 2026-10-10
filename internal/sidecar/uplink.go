@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc/metadata"
 
+	"github.com/tommyskeff/lameduck-controller/internal/backoff"
 	"github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1"
 )
 
@@ -26,7 +28,7 @@ type Uplink struct {
 }
 
 func (u *Uplink) Run(ctx context.Context) {
-	backoff := minBackoff
+	retry := backoff.NewExponential(minBackoff, maxBackoff, rand.Int64N)
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := u.session(ctx)
@@ -34,15 +36,15 @@ func (u *Uplink) Run(ctx context.Context) {
 			return
 		}
 		if time.Since(started) > maxBackoff {
-			backoff = minBackoff
+			retry.Reset()
 		}
-		u.Log.Warn("Fleet connection lost", "error", err.Error(), "retry", backoff.String())
+		delay := retry.Next()
+		u.Log.Warn("Fleet connection lost", "error", err.Error(), "retry", delay.String())
 		select {
-		case <-time.After(backoff):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return
 		}
-		backoff = min(backoff*2, maxBackoff)
 	}
 }
 

@@ -4,16 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/tommyskeff/lameduck-controller/internal/backoff"
 	"github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1"
 )
 
 const AddressEnv = "LAMEDUCK_SIDECAR_ADDRESS"
+
+const (
+	minimumReconnectDelay = 500 * time.Millisecond
+	maximumReconnectDelay = 10 * time.Second
+)
 
 type Client struct {
 	conn    *grpc.ClientConn
@@ -65,42 +72,64 @@ func (c *Client) MarkDrained(ctx context.Context) error {
 }
 
 func (c *Client) Watch(ctx context.Context, handle func(state *lameduckv1.PodState)) error {
+	retry := backoff.NewExponential(minimumReconnectDelay, maximumReconnectDelay, rand.Int64N)
+	for {
+		c.receive(ctx, retry, handle)
+		timer := time.NewTimer(retry.Next())
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *Client) receive(ctx context.Context, retry *backoff.Exponential, handle func(state *lameduckv1.PodState)) {
 	stream, err := c.sidecar.WatchState(ctx, &lameduckv1.WatchStateRequest{}, grpc.WaitForReady(true))
 	if err != nil {
-		return err
+		return
 	}
 	for {
 		response, err := stream.Recv()
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
+			return
 		}
+		retry.Reset()
 		handle(response.GetState())
 	}
 }
 
 func (c *Client) WatchDrain(ctx context.Context, handler DrainHandler) error {
-	draining := false
-	var deadline time.Time
-	return c.Watch(ctx, func(state *lameduckv1.PodState) {
-		if handler.OnState != nil {
-			handler.OnState(state)
+	tracker := &drainTracker{handler: handler}
+	return c.Watch(ctx, tracker.observe)
+}
+
+type drainTracker struct {
+	handler  DrainHandler
+	draining bool
+	deadline time.Time
+}
+
+func (d *drainTracker) observe(state *lameduckv1.PodState) {
+	if state.GetPhase() == lameduckv1.Phase_PHASE_UNSPECIFIED {
+		return
+	}
+	if d.handler.OnState != nil {
+		d.handler.OnState(state)
+	}
+	now := state.GetPhase() == lameduckv1.Phase_PHASE_DRAINING
+	next := state.GetDrainDeadline().AsTime()
+	switch {
+	case now && (!d.draining || !next.Equal(d.deadline)):
+		if d.handler.OnDrain != nil {
+			d.handler.OnDrain(state.GetDrainReason(), next)
 		}
-		now := state.GetPhase() == lameduckv1.Phase_PHASE_DRAINING
-		next := state.GetDrainDeadline().AsTime()
-		switch {
-		case now && (!draining || !next.Equal(deadline)):
-			if handler.OnDrain != nil {
-				handler.OnDrain(state.GetDrainReason(), next)
-			}
-		case !now && draining:
-			if handler.OnCancelled != nil {
-				handler.OnCancelled()
-			}
+	case !now && d.draining:
+		if d.handler.OnCancelled != nil {
+			d.handler.OnCancelled()
 		}
-		draining = now
-		deadline = next
-	})
+	}
+	d.draining = now
+	d.deadline = next
 }

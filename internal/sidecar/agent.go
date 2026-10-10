@@ -19,7 +19,7 @@ type Agent struct {
 
 func NewAgent() *Agent {
 	return &Agent{
-		state:    &lameduckv1.PodState{Phase: lameduckv1.Phase_PHASE_STARTING},
+		state:    &lameduckv1.PodState{Phase: lameduckv1.Phase_PHASE_UNSPECIFIED},
 		watchers: map[chan *lameduckv1.PodState]struct{}{},
 		reports:  make(chan struct{}, 1),
 	}
@@ -34,7 +34,7 @@ func (a *Agent) State() *lameduckv1.PodState {
 func (a *Agent) SetState(state *lameduckv1.PodState) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if proto.Equal(a.state, state) {
+	if state.GetPhase() == lameduckv1.Phase_PHASE_UNSPECIFIED || proto.Equal(a.state, state) {
 		return
 	}
 	a.state = state
@@ -54,7 +54,9 @@ func (a *Agent) Watch() (<-chan *lameduckv1.PodState, func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	watcher := make(chan *lameduckv1.PodState, 1)
-	watcher <- a.state
+	if a.state.GetPhase() != lameduckv1.Phase_PHASE_UNSPECIFIED {
+		watcher <- a.state
+	}
 	a.watchers[watcher] = struct{}{}
 	return watcher, func() {
 		a.mu.Lock()
