@@ -24,6 +24,7 @@ webhooks:
     resources:
     - drainsets
   sideEffects: None
+  timeoutSeconds: 5
 - admissionReviewVersions:
   - v1
   clientConfig:
@@ -43,6 +44,7 @@ webhooks:
     resources:
     - pods
   sideEffects: NoneOnDryRun
+  timeoutSeconds: 5
 - admissionReviewVersions:
   - v1
   clientConfig:
@@ -62,3 +64,4 @@ webhooks:
     resources:
     - pods/eviction
   sideEffects: NoneOnDryRun
+  timeoutSeconds: 5

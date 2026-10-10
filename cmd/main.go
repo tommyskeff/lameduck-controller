@@ -57,6 +57,7 @@ type config struct {
 	webhookService       string
 	webhookConfiguration string
 	namespace            string
+	podName              string
 	fleetBindAddress     string
 	fleetAddress         string
 	sidecarImage         string
@@ -82,6 +83,8 @@ func loadConfig() (config, error) {
 	flag.StringVar(&cfg.webhookService, "webhook-service", "", "Service name the webhook certificate is issued for.")
 	flag.StringVar(&cfg.webhookConfiguration, "webhook-configuration", "", "Webhook configuration to inject the CA into.")
 	flag.StringVar(&cfg.namespace, "namespace", "", "Namespace the controller runs in.")
+	flag.StringVar(&cfg.podName, "pod-name", "",
+		"Name of the controller's own pod, labelled while it leads; empty disables the label.")
 	flag.StringVar(&cfg.fleetBindAddress, "fleet-bind-address", ":9500", "Address the fleet gRPC server listens on.")
 	flag.StringVar(&cfg.fleetAddress, "fleet-address", "", "Address sidecars dial to reach the fleet server.")
 	flag.StringVar(&cfg.sidecarImage, "sidecar-image", "", "Image injected as the sidecar.")
@@ -112,6 +115,9 @@ func loadConfig() (config, error) {
 			return config{}, errors.New(
 				"--webhook-cert-secret needs --webhook-cert-path, --webhook-service, --webhook-configuration and --namespace")
 		}
+	}
+	if cfg.podName != "" && cfg.namespace == "" {
+		return config{}, errors.New("--pod-name needs --namespace")
 	}
 	return cfg, nil
 }
@@ -184,6 +190,19 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "Failed to add fleet server")
 		os.Exit(1)
+	}
+
+	if cfg.podName != "" {
+		err = mgr.Add(&fleet.LeaderLabeler{
+			Reader: mgr.GetAPIReader(),
+			Writer: mgr.GetClient(),
+			Pod:    types.NamespacedName{Namespace: cfg.namespace, Name: cfg.podName},
+			Log:    ctrl.Log.WithName("leader"),
+		})
+		if err != nil {
+			setupLog.Error(err, "Failed to add leader labeler")
+			os.Exit(1)
+		}
 	}
 
 	reconciler := &controller.DrainSetReconciler{

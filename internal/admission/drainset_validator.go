@@ -10,7 +10,7 @@ import (
 	lameduckv1alpha1 "github.com/tommyskeff/lameduck-controller/api/v1alpha1"
 )
 
-// +kubebuilder:webhook:path=/validate-lameduck-tommyjs-dev-v1alpha1-drainset,mutating=false,failurePolicy=fail,sideEffects=None,groups=lameduck.tommyjs.dev,resources=drainsets,verbs=create;update,versions=v1alpha1,name=drainset.lameduck.tommyjs.dev,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-lameduck-tommyjs-dev-v1alpha1-drainset,mutating=false,failurePolicy=fail,sideEffects=None,groups=lameduck.tommyjs.dev,resources=drainsets,verbs=create;update,versions=v1alpha1,name=drainset.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
 
 type DrainSetValidator struct {
 	SidecarPort int32

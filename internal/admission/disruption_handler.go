@@ -22,8 +22,8 @@ const (
 	DeletePath   = "/validate-pod-delete"
 )
 
-// +kubebuilder:webhook:path=/validate-pod-eviction,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods/eviction,verbs=create,versions=v1,name=pod-eviction.lameduck.tommyjs.dev,admissionReviewVersions=v1
-// +kubebuilder:webhook:path=/validate-pod-delete,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods,verbs=delete,versions=v1,name=pod-delete.lameduck.tommyjs.dev,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-pod-eviction,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods/eviction,verbs=create,versions=v1,name=pod-eviction.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
+// +kubebuilder:webhook:path=/validate-pod-delete,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods,verbs=delete,versions=v1,name=pod-delete.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
 
 type DisruptionHandler struct {
 	Client             client.Client

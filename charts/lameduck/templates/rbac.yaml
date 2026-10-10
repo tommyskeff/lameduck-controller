@@ -48,6 +48,9 @@ rules:
 - apiGroups: [""]
   resources: [events]
   verbs: [create, patch]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [list, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

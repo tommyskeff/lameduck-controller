@@ -6,9 +6,12 @@ metadata:
   labels:
     {{- include "lameduck.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.replicaCount }}
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       {{- include "lameduck.selectorLabels" . | nindent 6 }}
@@ -50,6 +53,8 @@ spec:
         - --sidecar-image={{ default (include "lameduck.image" .) .Values.sidecar.image }}
         - --sidecar-address={{ .Values.sidecar.address }}
         - --controller-username=system:serviceaccount:{{ .Release.Namespace }}:{{ include "lameduck.serviceAccount" . }}
+        - --namespace={{ .Release.Namespace }}
+        - --pod-name=$(POD_NAME)
         {{- if .Values.webhook.enabled }}
         - --webhook-port=9443
         - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
@@ -57,11 +62,15 @@ spec:
         - --webhook-cert-secret={{ include "lameduck.webhookSecret" . }}
         - --webhook-service={{ include "lameduck.webhookService" . }}
         - --webhook-configuration={{ include "lameduck.fullname" . }}
-        - --namespace={{ .Release.Namespace }}
         {{- end }}
         {{- else }}
         - --webhook-port=-1
         {{- end }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         ports:
         - name: health
           containerPort: 8081
@@ -115,7 +124,16 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- if .Values.affinity }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "lameduck.selectorLabels" . | nindent 18 }}
+        {{- end }}
