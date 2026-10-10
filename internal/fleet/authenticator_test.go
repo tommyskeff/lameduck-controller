@@ -4,16 +4,22 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/peer"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	lameduckv1alpha1 "github.com/tommyskeff/lameduck-controller/api/v1alpha1"
 )
 
 var limits = ReviewLimits{
@@ -144,4 +150,87 @@ func TestAuthenticatorBoundsConcurrentReviews(t *testing.T) {
 	}
 	close(r.release)
 	<-done
+}
+
+func testScheme() *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(lameduckv1alpha1.AddToScheme(scheme))
+	return scheme
+}
+
+func reviewingClient(t *testing.T, status authenticationv1.TokenReviewStatus, createErr error) client.Client {
+	t.Helper()
+	return fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...client.CreateOption) error {
+				review, ok := obj.(*authenticationv1.TokenReview)
+				if !ok {
+					t.Fatalf("created %T, want TokenReview", obj)
+				}
+				if review.Spec.Token != validToken {
+					t.Fatalf("reviewed token %q", review.Spec.Token)
+				}
+				if !slices.Equal(review.Spec.Audiences, []string{lameduckv1alpha1.SidecarTokenAudience}) {
+					t.Fatalf("audiences = %v", review.Spec.Audiences)
+				}
+				if createErr != nil {
+					return createErr
+				}
+				review.Status = status
+				return nil
+			},
+		}).
+		Build()
+}
+
+func boundStatus(username string, extra map[string]authenticationv1.ExtraValue) authenticationv1.TokenReviewStatus {
+	return authenticationv1.TokenReviewStatus{
+		Authenticated: true,
+		User:          authenticationv1.UserInfo{Username: username, Extra: extra},
+	}
+}
+
+func podExtra(name, uid string) map[string]authenticationv1.ExtraValue {
+	return map[string]authenticationv1.ExtraValue{
+		extraPodName: {name},
+		extraPodUID:  {uid},
+	}
+}
+
+func TestAuthenticatorRejectsTokensNotBoundToOnePod(t *testing.T) {
+	name, uid := identity.Name, string(identity.UID)
+	cases := map[string]authenticationv1.TokenReviewStatus{
+		"unauthenticated": {Authenticated: false},
+		"user token":      boundStatus("alice", podExtra(name, uid)),
+		"node token":      boundStatus("system:node:worker-1", podExtra(name, uid)),
+		"unbound token":   boundStatus("system:serviceaccount:games:default", nil),
+		"missing uid": boundStatus("system:serviceaccount:games:default", map[string]authenticationv1.ExtraValue{
+			extraPodName: {name},
+		}),
+		"ambiguous pod": boundStatus("system:serviceaccount:games:default", map[string]authenticationv1.ExtraValue{
+			extraPodName: {name, "bedwars-def"},
+			extraPodUID:  {uid},
+		}),
+	}
+	for name, status := range cases {
+		t.Run(name, func(t *testing.T) {
+			authenticator := NewTokenAuthenticator(reviewingClient(t, status, nil), clocktesting.NewFakeClock(time.Now()), limits)
+			if _, err := authenticator.Authenticate(from("10.0.0.1"), validToken); err == nil {
+				t.Fatal("authenticated, want rejection")
+			}
+		})
+	}
+}
+
+func TestAuthenticatorReviewErrorsDoNotThrottleSource(t *testing.T) {
+	unavailable := errors.New("api server unavailable")
+	authenticator := NewTokenAuthenticator(reviewingClient(t, authenticationv1.TokenReviewStatus{}, unavailable),
+		clocktesting.NewFakeClock(time.Now()), limits)
+	for range limits.FailureBurst + 1 {
+		if _, err := authenticator.Authenticate(from("10.0.0.1"), validToken); !errors.Is(err, unavailable) {
+			t.Fatalf("err = %v, want wrapped review error", err)
+		}
+	}
 }
