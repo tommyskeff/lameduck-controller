@@ -141,6 +141,18 @@ func (r *Registry) Report(uid types.UID) Report {
 	return report
 }
 
+func (r *Registry) ConnectedSidecars() map[types.NamespacedName]int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	counts := map[types.NamespacedName]int{}
+	for _, record := range r.pods {
+		if record.session != nil {
+			counts[record.set]++
+		}
+	}
+	return counts
+}
+
 func (r *Registry) Publish(uid types.UID, set types.NamespacedName, state *lameduckv1.PodState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

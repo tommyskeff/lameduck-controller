@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -28,6 +29,7 @@ import (
 
 	lameduckv1alpha1 "github.com/tommyskeff/lameduck-controller/api/v1alpha1"
 	"github.com/tommyskeff/lameduck-controller/internal/fleet"
+	"github.com/tommyskeff/lameduck-controller/internal/metrics"
 	"github.com/tommyskeff/lameduck-controller/internal/planner"
 	"github.com/tommyskeff/lameduck-controller/internal/revision"
 )
@@ -45,6 +47,8 @@ type DrainSetReconciler struct {
 	History      revision.History
 	Pods         PodFactory
 	Expectations *Expectations
+	Recorder     events.EventRecorder
+	Metrics      *metrics.DrainMetrics
 
 	swapsMu sync.Mutex
 	swaps   map[types.NamespacedName]map[planner.SwapPair]time.Time
@@ -68,6 +72,7 @@ type reconcileState struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=controllerrevisions,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *DrainSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var set lameduckv1alpha1.DrainSet
@@ -76,6 +81,7 @@ func (r *DrainSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			r.Expectations.Forget(req.NamespacedName)
 			r.Registry.Retain(req.NamespacedName, nil)
 			r.storeSwaps(req.NamespacedName, nil)
+			r.Metrics.Forget(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -194,10 +200,10 @@ func (r *DrainSetReconciler) listPods(ctx context.Context, set *lameduckv1alpha1
 
 func (r *DrainSetReconciler) removalReason(ctx context.Context, state *reconcileState, pod *corev1.Pod) string {
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-		return "Finished"
+		return removalFinished
 	}
 	if _, ok := pod.Annotations[lameduckv1alpha1.AnnotationTerminate]; ok {
-		return "Terminated"
+		return removalTerminated
 	}
 	drain, repaired := readRepairedDrain(pod, r.timeouts(state.set), state.now)
 	if drain == nil {
@@ -208,10 +214,10 @@ func (r *DrainSetReconciler) removalReason(ctx context.Context, state *reconcile
 			"started", drain.Started, "deadline", drain.Deadline)
 	}
 	if r.Registry.Report(pod.UID).Drained {
-		return "Drained"
+		return removalDrained
 	}
 	if !state.now.Before(drain.Deadline) {
-		return "DrainTimeout"
+		return removalDrainTimeout
 	}
 	state.requeue = min(state.requeue, drain.Deadline.Sub(state.now))
 	return ""
@@ -228,6 +234,9 @@ func (r *DrainSetReconciler) deletePod(ctx context.Context, state *reconcileStat
 	}
 	r.Expectations.ExpectDelete(state.key, pod.Name)
 	logf.FromContext(ctx).Info("Deleted pod", "pod", pod.Name, "reason", reason)
+	if err == nil {
+		r.recordRemoval(state, pod, reason)
+	}
 	return nil
 }
 
@@ -375,7 +384,8 @@ func (r *DrainSetReconciler) patchPods(ctx context.Context, state *reconcileStat
 		if maps.Equal(original.Labels, desired.Labels) && maps.Equal(original.Annotations, desired.Annotations) {
 			continue
 		}
-		if err := r.Client.Patch(ctx, desired, client.MergeFrom(original)); client.IgnoreNotFound(err) != nil {
+		err := r.Client.Patch(ctx, desired, client.MergeFrom(original))
+		if client.IgnoreNotFound(err) != nil {
 			return fmt.Errorf("patch pod %s: %w", desired.Name, err)
 		}
 		before := original.Annotations[lameduckv1alpha1.AnnotationDrainReason]
@@ -389,6 +399,9 @@ func (r *DrainSetReconciler) patchPods(ctx context.Context, state *reconcileStat
 			log.Info("Cancelled drain", "pod", desired.Name, "reason", before)
 		} else {
 			log.Info("Draining pod", "pod", desired.Name, "reason", after)
+		}
+		if err == nil {
+			r.recordDrainChange(state, original, desired)
 		}
 	}
 	return nil
@@ -406,6 +419,8 @@ func (r *DrainSetReconciler) createPods(ctx context.Context, state *reconcileSta
 		r.Expectations.ExpectCreate(state.key, pod.Name)
 		state.created++
 		logf.FromContext(ctx).Info("Created pod", "pod", pod.Name, "revision", state.update.Hash)
+		r.Recorder.Eventf(state.set, pod, corev1.EventTypeNormal, eventReasonCreated, actionCreate,
+			"Created pod %s at revision %s", pod.Name, state.update.Hash)
 	}
 	return nil
 }

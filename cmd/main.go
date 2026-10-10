@@ -17,11 +17,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -30,6 +32,7 @@ import (
 	"github.com/tommyskeff/lameduck-controller/internal/admission"
 	"github.com/tommyskeff/lameduck-controller/internal/controller"
 	"github.com/tommyskeff/lameduck-controller/internal/fleet"
+	"github.com/tommyskeff/lameduck-controller/internal/metrics"
 	"github.com/tommyskeff/lameduck-controller/internal/revision"
 )
 
@@ -91,7 +94,6 @@ func loadConfig() (config, error) {
 	flag.StringVar(&cfg.sidecarAddress, "sidecar-address",
 		fmt.Sprintf("127.0.0.1:%d", lameduckv1alpha1.DefaultSidecarPort), "Sidecar SDK address in each pod.")
 	flag.StringVar(&cfg.controllerUsername, "controller-username", "", "Username exempt from delete protection.")
-	cfg.zap = zap.Options{Development: true}
 	cfg.zap.BindFlags(flag.CommandLine)
 	flag.Parse()
 
@@ -179,6 +181,16 @@ func main() {
 
 	realClock := clock.RealClock{}
 	registry := fleet.NewRegistry(realClock)
+	drainMetrics := metrics.NewDrainMetrics()
+	if err := drainMetrics.Register(crmetrics.Registry); err != nil {
+		setupLog.Error(err, "Failed to register metrics")
+		os.Exit(1)
+	}
+	if err := crmetrics.Registry.Register(metrics.SidecarCollector{Counter: registry}); err != nil {
+		setupLog.Error(err, "Failed to register sidecar metrics")
+		os.Exit(1)
+	}
+	recorder := mgr.GetEventRecorder("lameduck-controller")
 
 	err = mgr.Add(&fleet.Server{
 		Address:       cfg.fleetBindAddress,
@@ -218,6 +230,8 @@ func main() {
 			FleetAddress:   cfg.fleetAddress,
 		},
 		Expectations: controller.NewExpectations(realClock),
+		Recorder:     recorder,
+		Metrics:      drainMetrics,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller")
@@ -237,7 +251,7 @@ func main() {
 		}
 		go func() {
 			<-certsReady
-			if err := registerWebhooks(mgr, cfg); err != nil {
+			if err := registerWebhooks(mgr, cfg, recorder, drainMetrics); err != nil {
 				setupLog.Error(err, "Failed to register webhooks")
 				os.Exit(1)
 			}
@@ -280,7 +294,12 @@ func addCertRotator(mgr manager.Manager, cfg config, ready chan struct{}) error 
 	})
 }
 
-func registerWebhooks(mgr manager.Manager, cfg config) error {
+func registerWebhooks(
+	mgr manager.Manager,
+	cfg config,
+	recorder events.EventRecorder,
+	drainMetrics *metrics.DrainMetrics,
+) error {
 	validator := &admission.DrainSetValidator{SidecarPort: cfg.sidecarPort}
 	if err := admission.SetupDrainSetValidator(mgr, validator); err != nil {
 		return fmt.Errorf("set up drainset validator: %w", err)
@@ -290,10 +309,14 @@ func registerWebhooks(mgr manager.Manager, cfg config) error {
 		Client:             mgr.GetClient(),
 		ControllerUsername: cfg.controllerUsername,
 		Eviction:           true,
+		Recorder:           recorder,
+		Metrics:            drainMetrics,
 	}})
 	server.Register(admission.DeletePath, &webhook.Admission{Handler: &admission.DisruptionHandler{
 		Client:             mgr.GetClient(),
 		ControllerUsername: cfg.controllerUsername,
+		Recorder:           recorder,
+		Metrics:            drainMetrics,
 	}})
 	return nil
 }
