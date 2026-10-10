@@ -5,6 +5,7 @@ const (
 	LabelRevision = "lameduck.tommyjs.dev/revision"
 	LabelPhase    = "lameduck.tommyjs.dev/phase"
 	LabelRoutable = "lameduck.tommyjs.dev/routable"
+	LabelLeader   = "lameduck.tommyjs.dev/leader"
 
 	AnnotationDrainReason   = "lameduck.tommyjs.dev/drain-reason"
 	AnnotationDrainStarted  = "lameduck.tommyjs.dev/drain-started"

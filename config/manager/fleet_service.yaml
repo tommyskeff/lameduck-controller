@@ -3,6 +3,7 @@ kind: Service
 metadata:
   labels:
     app.kubernetes.io/name: lameduck
+    lameduck.tommyjs.dev/leader: "true"
     app.kubernetes.io/managed-by: kustomize
   name: fleet
   namespace: system

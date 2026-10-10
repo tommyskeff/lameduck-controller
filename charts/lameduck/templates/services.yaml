@@ -12,6 +12,7 @@ spec:
     targetPort: fleet
   selector:
     {{- include "lameduck.selectorLabels" . | nindent 4 }}
+    lameduck.tommyjs.dev/leader: "true"
 {{- if .Values.webhook.enabled }}
 ---
 apiVersion: v1
