@@ -315,6 +315,7 @@ type DrainSetStatus struct {
 	// +optional
 	UpdateRevision string `json:"updateRevision,omitempty"`
 
+	// The spec selector narrowed to pods that are not draining, used by the scale subresource.
 	// +optional
 	Selector string `json:"selector,omitempty"`
 

@@ -30,15 +30,37 @@ func readDrain(pod *corev1.Pod) *planner.Drain {
 		return nil
 	}
 	started, _ := time.Parse(time.RFC3339, pod.Annotations[lameduckv1alpha1.AnnotationDrainStarted])
-	deadline, err := time.Parse(time.RFC3339, pod.Annotations[lameduckv1alpha1.AnnotationDrainDeadline])
-	if err != nil {
-		deadline = started
-	}
+	deadline, _ := time.Parse(time.RFC3339, pod.Annotations[lameduckv1alpha1.AnnotationDrainDeadline])
 	return &planner.Drain{
 		Reason:   lameduckv1alpha1.DrainReason(reason),
 		Started:  started,
 		Deadline: deadline,
 	}
+}
+
+func readRepairedDrain(
+	pod *corev1.Pod,
+	timeouts map[lameduckv1alpha1.DrainReason]time.Duration,
+	now time.Time,
+) (*planner.Drain, bool) {
+	drain := readDrain(pod)
+	if drain == nil {
+		return nil, false
+	}
+	repaired := false
+	if drain.Started.IsZero() {
+		drain.Started = now
+		repaired = true
+	}
+	if drain.Deadline.IsZero() {
+		timeout, ok := timeouts[drain.Reason]
+		if !ok {
+			timeout = timeouts[lameduckv1alpha1.DrainReasonManual]
+		}
+		drain.Deadline = drain.Started.Add(timeout)
+		repaired = true
+	}
+	return drain, repaired
 }
 
 func writeDrain(pod *corev1.Pod, drain *planner.Drain) {

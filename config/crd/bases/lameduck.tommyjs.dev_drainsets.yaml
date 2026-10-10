@@ -9272,6 +9272,8 @@ spec:
                 format: int32
                 type: integer
               selector:
+                description: The spec selector narrowed to pods that are not draining,
+                  used by the scale subresource.
                 type: string
               updateRevision:
                 type: string

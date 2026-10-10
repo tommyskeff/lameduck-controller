@@ -15,10 +15,8 @@ import (
 )
 
 const (
-	sidecarContainerName = "lameduck-sidecar"
-	sidecarTokenVolume   = "lameduck-token"
-	sidecarTokenDir      = "/var/run/secrets/lameduck.tommyjs.dev"
-	SidecarAddressEnv    = "LAMEDUCK_SIDECAR_ADDRESS"
+	sidecarTokenDir   = "/var/run/secrets/lameduck.tommyjs.dev"
+	SidecarAddressEnv = "LAMEDUCK_SIDECAR_ADDRESS"
 )
 
 type PodFactory struct {
@@ -51,7 +49,7 @@ func (f PodFactory) Build(set *lameduckv1alpha1.DrainSet, rev revision.Revision)
 		})
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-		Name: sidecarTokenVolume,
+		Name: lameduckv1alpha1.SidecarTokenVolume,
 		VolumeSource: corev1.VolumeSource{
 			Projected: &corev1.ProjectedVolumeSource{
 				DefaultMode: new(int32(0o444)),
@@ -75,7 +73,7 @@ func (f PodFactory) Build(set *lameduckv1alpha1.DrainSet, rev revision.Revision)
 
 func (f PodFactory) sidecar() corev1.Container {
 	return corev1.Container{
-		Name:          sidecarContainerName,
+		Name:          lameduckv1alpha1.SidecarContainerName,
 		Image:         f.SidecarImage,
 		Command:       []string{"/sidecar"},
 		RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways),
@@ -85,7 +83,7 @@ func (f PodFactory) sidecar() corev1.Container {
 			{Name: "LAMEDUCK_TOKEN_PATH", Value: sidecarTokenDir + "/token"},
 		},
 		VolumeMounts: []corev1.VolumeMount{{
-			Name:      sidecarTokenVolume,
+			Name:      lameduckv1alpha1.SidecarTokenVolume,
 			MountPath: sidecarTokenDir,
 			ReadOnly:  true,
 		}},
