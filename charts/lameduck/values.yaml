@@ -11,6 +11,9 @@ sidecar:
   image: ""
   address: 127.0.0.1:9450
 
+fleet:
+  acceptPlaintext: false
+
 crd:
   install: true
   keep: true

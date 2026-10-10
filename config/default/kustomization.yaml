@@ -96,6 +96,17 @@ replacements:
     fieldPaths:
     - .spec.template.spec.containers.[name=manager].env.[name=FLEET_SERVICE].value
 - source:
+    kind: Secret
+    version: v1
+    name: fleet-server-cert
+    fieldPath: .metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - .spec.template.spec.containers.[name=manager].env.[name=FLEET_CERT_SECRET].value
+- source:
     kind: Deployment
     name: controller-manager
     fieldPath: .spec.template.spec.containers.[name=manager].image

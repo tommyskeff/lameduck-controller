@@ -10,7 +10,9 @@ import (
 	"github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1"
 )
 
-var set = types.NamespacedName{Namespace: "games", Name: "bedwars"}
+const testNamespace = "games"
+
+var set = types.NamespacedName{Namespace: testNamespace, Name: "bedwars"}
 
 func draining() *lameduckv1.PodState {
 	return &lameduckv1.PodState{Phase: lameduckv1.Phase_PHASE_DRAINING}
@@ -84,7 +86,7 @@ func TestRetainForgetsDeletedPods(t *testing.T) {
 
 func TestConnectedSidecarsCountsOpenSessions(t *testing.T) {
 	registry := NewRegistry(clocktesting.NewFakeClock(time.Now()))
-	other := types.NamespacedName{Namespace: "games", Name: "skywars"}
+	other := types.NamespacedName{Namespace: testNamespace, Name: "skywars"}
 	registry.Attach("pod-a", set)
 	session := registry.Attach("pod-b", set)
 	registry.Attach("pod-c", other)

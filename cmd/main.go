@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -63,6 +64,9 @@ type config struct {
 	podName              string
 	fleetBindAddress     string
 	fleetAddress         string
+	fleetCertSecret      string
+	fleetCertPath        string
+	fleetAcceptPlaintext bool
 	sidecarImage         string
 	sidecarAddress       string
 	sidecarPort          int32
@@ -90,6 +94,10 @@ func loadConfig() (config, error) {
 		"Name of the controller's own pod, labelled while it leads; empty disables the label.")
 	flag.StringVar(&cfg.fleetBindAddress, "fleet-bind-address", ":9500", "Address the fleet gRPC server listens on.")
 	flag.StringVar(&cfg.fleetAddress, "fleet-address", "", "Address sidecars dial to reach the fleet server.")
+	flag.StringVar(&cfg.fleetCertSecret, "fleet-cert-secret", "", "Secret holding the self-signed fleet certificate.")
+	flag.StringVar(&cfg.fleetCertPath, "fleet-cert-path", "", "Directory the fleet certificate secret is mounted at.")
+	flag.BoolVar(&cfg.fleetAcceptPlaintext, "fleet-accept-plaintext", false,
+		"Also accept plaintext connections from sidecars injected before the fleet server used TLS.")
 	flag.StringVar(&cfg.sidecarImage, "sidecar-image", "", "Image injected as the sidecar.")
 	flag.StringVar(&cfg.sidecarAddress, "sidecar-address",
 		fmt.Sprintf("127.0.0.1:%d", lameduckv1alpha1.DefaultSidecarPort), "Sidecar SDK address in each pod.")
@@ -103,6 +111,9 @@ func loadConfig() (config, error) {
 	if cfg.sidecarImage == "" {
 		return config{}, errors.New("--sidecar-image is required")
 	}
+	if cfg.fleetCertSecret == "" || cfg.fleetCertPath == "" || cfg.namespace == "" {
+		return config{}, errors.New("--fleet-cert-secret, --fleet-cert-path and --namespace are required")
+	}
 	_, port, err := net.SplitHostPort(cfg.sidecarAddress)
 	if err != nil {
 		return config{}, fmt.Errorf("--sidecar-address is invalid: %w", err)
@@ -113,13 +124,10 @@ func loadConfig() (config, error) {
 	}
 	cfg.sidecarPort = int32(sidecarPort)
 	if cfg.webhookSecret != "" {
-		if cfg.webhookCertPath == "" || cfg.webhookService == "" || cfg.webhookConfiguration == "" || cfg.namespace == "" {
+		if cfg.webhookCertPath == "" || cfg.webhookService == "" || cfg.webhookConfiguration == "" {
 			return config{}, errors.New(
-				"--webhook-cert-secret needs --webhook-cert-path, --webhook-service, --webhook-configuration and --namespace")
+				"--webhook-cert-secret needs --webhook-cert-path, --webhook-service and --webhook-configuration")
 		}
-	}
-	if cfg.podName != "" && cfg.namespace == "" {
-		return config{}, errors.New("--pod-name needs --namespace")
 	}
 	return cfg, nil
 }
@@ -192,12 +200,34 @@ func main() {
 	}
 	recorder := mgr.GetEventRecorder("lameduck-controller")
 
+	fleetCertsReady := make(chan struct{})
+	fleetRotator, err := fleet.NewCertificateRotator(
+		types.NamespacedName{Namespace: cfg.namespace, Name: cfg.fleetCertSecret},
+		cfg.fleetCertPath, cfg.fleetAddress, fleetCertsReady)
+	if err != nil {
+		setupLog.Error(err, "Invalid fleet certificate configuration")
+		os.Exit(1)
+	}
+	if err := rotator.AddRotator(mgr, fleetRotator); err != nil {
+		setupLog.Error(err, "Failed to add fleet certificate rotator")
+		os.Exit(1)
+	}
+
 	err = mgr.Add(&fleet.Server{
-		Address:       cfg.fleetBindAddress,
-		Registry:      registry,
-		Authenticator: fleet.TokenAuthenticator{Client: mgr.GetClient()},
-		Reader:        mgr.GetClient(),
-		Log:           ctrl.Log.WithName("fleet"),
+		Address:           cfg.fleetBindAddress,
+		CertificateDir:    cfg.fleetCertPath,
+		CertificatesReady: fleetCertsReady,
+		AcceptPlaintext:   cfg.fleetAcceptPlaintext,
+		Registry:          registry,
+		Authenticator: fleet.NewTokenAuthenticator(mgr.GetClient(), realClock, fleet.ReviewLimits{
+			Concurrency:     16,
+			Timeout:         10 * time.Second,
+			CacheTTL:        10 * time.Minute,
+			FailureInterval: 10 * time.Second,
+			FailureBurst:    5,
+		}),
+		Reader: mgr.GetClient(),
+		Log:    ctrl.Log.WithName("fleet"),
 	})
 	if err != nil {
 		setupLog.Error(err, "Failed to add fleet server")
@@ -228,6 +258,7 @@ func main() {
 			SidecarImage:   cfg.sidecarImage,
 			SidecarAddress: cfg.sidecarAddress,
 			FleetAddress:   cfg.fleetAddress,
+			FleetCA:        fleet.CertificateAuthorityIn(cfg.fleetCertPath),
 		},
 		Expectations: controller.NewExpectations(realClock),
 		Recorder:     recorder,
