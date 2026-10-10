@@ -52,7 +52,7 @@ webhooks:
       name: webhook-service
       namespace: system
       path: /validate-pod-eviction
-  failurePolicy: Ignore
+  failurePolicy: Fail
   name: pod-eviction.lameduck.tommyjs.dev
   rules:
   - apiGroups:

@@ -14,3 +14,11 @@ patches:
         matchExpressions:
         - key: lameduck.tommyjs.dev/set
           operator: Exists
+    - name: pod-eviction.lameduck.tommyjs.dev
+      namespaceSelector:
+        matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+          - kube-system
+          - lameduck-system

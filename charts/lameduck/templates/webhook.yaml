@@ -50,7 +50,11 @@ type: Opaque
 {{- $webhook := . }}
 {{- $_ := set $webhook.clientConfig.service "name" $service }}
 {{- $_ := set $webhook.clientConfig.service "namespace" $.Release.Namespace }}
-{{- if hasPrefix "pod-" $webhook.name }}
+{{- if eq $webhook.name "pod-eviction.lameduck.tommyjs.dev" }}
+{{- $_ := set $webhook "failurePolicy" $.Values.webhook.eviction.failurePolicy }}
+{{- $excluded := dict "matchExpressions" (list (dict "key" "kubernetes.io/metadata.name" "operator" "NotIn" "values" (list "kube-system" $.Release.Namespace))) }}
+{{- $_ := set $webhook "namespaceSelector" (default $excluded $.Values.webhook.eviction.namespaceSelector) }}
+{{- else if hasPrefix "pod-" $webhook.name }}
 {{- $_ := set $webhook "failurePolicy" $.Values.webhook.podFailurePolicy }}
 {{- end }}
 {{- if eq $webhook.name "pod-delete.lameduck.tommyjs.dev" }}
