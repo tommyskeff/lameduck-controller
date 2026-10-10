@@ -18,14 +18,23 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	lameduckv1alpha1 "github.com/tommyskeff/lameduck-controller/api/v1alpha1"
 	"github.com/tommyskeff/lameduck-controller/internal/sidecar"
 	"github.com/tommyskeff/lameduck-controller/pkg/proto/lameduckv1"
 )
 
-const fleetAddress = "lameduck-fleet.lameduck-system.svc:9500"
+const (
+	fleetAddress = "lameduck-fleet.lameduck-system.svc:9500"
+	sidecarToken = "sidecar-token"
+)
 
 type rejectingAuthenticator struct{}
 
@@ -189,5 +198,180 @@ func TestServerAcceptsPlaintextWhenAllowed(t *testing.T) {
 	}
 	if code := connect(t, fleetAddress, address, insecure.NewCredentials()); code != codes.Unauthenticated {
 		t.Errorf("code = %v over plaintext; want Unauthenticated from the handler", code)
+	}
+}
+
+type staticAuthenticator struct{}
+
+func (staticAuthenticator) Authenticate(_ context.Context, token string) (PodIdentity, error) {
+	if token != sidecarToken {
+		return PodIdentity{}, errors.New("token rejected")
+	}
+	return identity, nil
+}
+
+func managedPod(t *testing.T) *corev1.Pod {
+	t.Helper()
+	owner := &lameduckv1alpha1.DrainSet{
+		ObjectMeta: metav1.ObjectMeta{Namespace: set.Namespace, Name: set.Name, UID: "set-uid"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: set.Namespace,
+			Name:      identity.Name,
+			UID:       identity.UID,
+			Labels:    map[string]string{lameduckv1alpha1.LabelSet: set.Name},
+		},
+	}
+	if err := controllerutil.SetControllerReference(owner, pod, testScheme()); err != nil {
+		t.Fatalf("own pod: %v", err)
+	}
+	return pod
+}
+
+type serverFixture struct {
+	registry *Registry
+	conn     *grpc.ClientConn
+}
+
+func startServer(t *testing.T, pod *corev1.Pod) serverFixture {
+	t.Helper()
+	builder := fake.NewClientBuilder().WithScheme(testScheme())
+	if pod != nil {
+		builder = builder.WithObjects(pod)
+	}
+	registry := NewRegistry(clocktesting.NewFakeClock(time.Now()))
+	server := &Server{
+		Registry:      registry,
+		Authenticator: staticAuthenticator{},
+		Reader:        builder.Build(),
+		Log:           logr.Discard(),
+	}
+
+	listener := bufconn.Listen(1 << 20)
+	grpcServer := grpc.NewServer()
+	lameduckv1.RegisterFleetServiceServer(grpcServer, server)
+	go func() {
+		_ = grpcServer.Serve(listener)
+	}()
+	t.Cleanup(grpcServer.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return listener.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+	})
+	return serverFixture{registry: registry, conn: conn}
+}
+
+func (f serverFixture) connect(t *testing.T, authorization ...string) grpc.BidiStreamingClient[lameduckv1.ConnectRequest, lameduckv1.ConnectResponse] {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	for _, value := range authorization {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", value)
+	}
+	stream, err := lameduckv1.NewFleetServiceClient(f.conn).Connect(ctx)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	return stream
+}
+
+func expectCode(t *testing.T, stream grpc.BidiStreamingClient[lameduckv1.ConnectRequest, lameduckv1.ConnectResponse], code codes.Code) {
+	t.Helper()
+	_, err := stream.Recv()
+	if status.Code(err) != code {
+		t.Fatalf("err = %v, want code %v", err, code)
+	}
+}
+
+func TestConnectRequiresBearerToken(t *testing.T) {
+	f := startServer(t, managedPod(t))
+	cases := map[string][]string{
+		"missing":     nil,
+		"not bearer":  {"Basic " + sidecarToken},
+		"two headers": {"Bearer " + sidecarToken, "Bearer " + sidecarToken},
+	}
+	for name, authorization := range cases {
+		t.Run(name, func(t *testing.T) {
+			expectCode(t, f.connect(t, authorization...), codes.Unauthenticated)
+		})
+	}
+}
+
+func TestConnectRejectsInsidecarToken(t *testing.T) {
+	f := startServer(t, managedPod(t))
+	expectCode(t, f.connect(t, "Bearer forged"), codes.Unauthenticated)
+}
+
+func TestConnectRejectsMissingPod(t *testing.T) {
+	f := startServer(t, nil)
+	expectCode(t, f.connect(t, "Bearer "+sidecarToken), codes.NotFound)
+}
+
+func TestConnectRejectsUnmanagedPod(t *testing.T) {
+	cases := map[string]func(pod *corev1.Pod){
+		"replaced pod": func(pod *corev1.Pod) {
+			pod.UID = "previous-pod-uid"
+		},
+		"no set label": func(pod *corev1.Pod) {
+			pod.Labels = nil
+		},
+		"no owner": func(pod *corev1.Pod) {
+			pod.OwnerReferences = nil
+		},
+		"other kind": func(pod *corev1.Pod) {
+			pod.OwnerReferences[0].Kind = "ReplicaSet"
+		},
+		"label names another set": func(pod *corev1.Pod) {
+			pod.Labels[lameduckv1alpha1.LabelSet] = "skywars"
+		},
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			pod := managedPod(t)
+			mutate(pod)
+			f := startServer(t, pod)
+			expectCode(t, f.connect(t, "Bearer "+sidecarToken), codes.PermissionDenied)
+		})
+	}
+}
+
+func TestConnectAttachesManagedPod(t *testing.T) {
+	f := startServer(t, managedPod(t))
+	f.registry.Publish(identity.UID, set, draining())
+	stream := f.connect(t, "Bearer "+sidecarToken)
+
+	response, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("receive state: %v", err)
+	}
+	if response.GetState().GetPhase() != lameduckv1.Phase_PHASE_DRAINING {
+		t.Fatalf("phase = %v", response.GetState().GetPhase())
+	}
+
+	err = stream.Send(&lameduckv1.ConnectRequest{
+		Message: &lameduckv1.ConnectRequest_Drained{Drained: &lameduckv1.DrainedReport{}},
+	})
+	if err != nil {
+		t.Fatalf("send drained: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !f.registry.Report(identity.UID).Drained {
+		if time.Now().After(deadline) {
+			t.Fatal("drained report never reached the registry")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !f.registry.Report(identity.UID).Connected {
+		t.Fatal("session not attached")
 	}
 }

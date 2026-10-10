@@ -43,8 +43,17 @@ vet: ## Run go vet.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet ## Run tests.
-	go test ./... -coverprofile cover.out
+test: manifests generate fmt vet setup-envtest ## Run unit and envtest tests.
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test ./... -coverprofile cover.out
+
+.PHONY: test-e2e
+test-e2e: ## Build the images, install the chart into the kind cluster and run the end-to-end tests.
+	$(CONTAINER_TOOL) build -t $(E2E_IMAGE_REPOSITORY):$(E2E_IMAGE_TAG) .
+	$(CONTAINER_TOOL) build -t $(E2E_APP_IMG) -f test/e2e/app/Dockerfile .
+	"$(KIND)" load docker-image $(E2E_IMAGE_REPOSITORY):$(E2E_IMAGE_TAG) $(E2E_APP_IMG) --name $(KIND_CLUSTER)
+	helm upgrade --install lameduck charts/lameduck --namespace lameduck-system --create-namespace --wait --timeout 5m \
+		--set image.repository=$(E2E_IMAGE_REPOSITORY) --set image.tag=$(E2E_IMAGE_TAG)
+	go test -tags e2e ./test/e2e/ -v -count=1 -timeout 15m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint.
@@ -109,6 +118,12 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 KUBECTL ?= kubectl
+KIND ?= kind
+KIND_CLUSTER ?= lameduck-e2e
+E2E_IMAGE_REPOSITORY ?= lameduck-controller
+E2E_IMAGE_TAG ?= e2e
+E2E_APP_IMG ?= lameduck-e2e-app:e2e
+ENVTEST ?= $(LOCALBIN)/setup-envtest
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
@@ -120,6 +135,8 @@ CONTROLLER_TOOLS_VERSION ?= v0.22.0
 GOLANGCI_LINT_VERSION ?= v2.13.1
 PROTOC_GEN_GO_VERSION ?= v1.36.12
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
+ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
+ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
@@ -130,6 +147,15 @@ $(KUSTOMIZE): $(LOCALBIN)
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
 $(CONTROLLER_GEN): $(LOCALBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Download the envtest control plane binaries into bin/k8s.
+	"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.

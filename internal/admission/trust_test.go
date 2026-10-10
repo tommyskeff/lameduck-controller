@@ -13,8 +13,8 @@ func TestTrustedUsers(t *testing.T) {
 		{controller, false, true},
 		{"system:serviceaccount:kube-system:cluster-autoscaler", true, false},
 		{"system:serviceaccount:kube-system:cluster-autoscaler", false, true},
-		{"system:node:worker-1", true, false},
-		{"system:node:worker-1", false, true},
+		{nodeUsername, true, false},
+		{nodeUsername, false, true},
 		{"kubernetes-admin", true, false},
 		{"kubernetes-admin", false, false},
 	}
