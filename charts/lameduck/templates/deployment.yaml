@@ -55,7 +55,6 @@ spec:
         {{- if .Values.fleet.acceptPlaintext }}
         - --fleet-accept-plaintext
         {{- end }}
-        - --namespace={{ .Release.Namespace }}
         - --sidecar-image={{ default (include "lameduck.image" .) .Values.sidecar.image }}
         - --sidecar-address={{ .Values.sidecar.address }}
         - --controller-username=system:serviceaccount:{{ .Release.Namespace }}:{{ include "lameduck.serviceAccount" . }}

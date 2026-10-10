@@ -52,7 +52,6 @@ spec:
         - --namespace=$(POD_NAMESPACE)
         - --sidecar-image=$(SIDECAR_IMAGE)
         - --controller-username=system:serviceaccount:$(POD_NAMESPACE):$(SERVICE_ACCOUNT)
-        - --namespace=$(POD_NAMESPACE)
         - --pod-name=$(POD_NAME)
         env:
         - name: POD_NAME
