@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "lameduck.fleetSecret" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+type: Opaque
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lameduck.fullname" . }}-fleet-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [secrets]
+  resourceNames: [{{ include "lameduck.fleetSecret" . }}]
+  verbs: [update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lameduck.fullname" . }}-fleet-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "lameduck.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lameduck.fullname" . }}-fleet-cert
+subjects:
+- kind: ServiceAccount
+  name: {{ include "lameduck.serviceAccount" . }}
+  namespace: {{ .Release.Namespace }}

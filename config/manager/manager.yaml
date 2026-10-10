@@ -47,6 +47,9 @@ spec:
         - --health-probe-bind-address=:8081
         - --fleet-bind-address=:9500
         - --fleet-address=$(FLEET_SERVICE).$(POD_NAMESPACE).svc:9500
+        - --fleet-cert-secret=$(FLEET_CERT_SECRET)
+        - --fleet-cert-path=/tmp/k8s-fleet-server/serving-certs
+        - --namespace=$(POD_NAMESPACE)
         - --sidecar-image=$(SIDECAR_IMAGE)
         - --controller-username=system:serviceaccount:$(POD_NAMESPACE):$(SERVICE_ACCOUNT)
         - --namespace=$(POD_NAMESPACE)
@@ -66,6 +69,8 @@ spec:
               fieldPath: spec.serviceAccountName
         - name: FLEET_SERVICE
           value: fleet
+        - name: FLEET_CERT_SECRET
+          value: fleet-server-cert
         - name: SIDECAR_IMAGE
           value: controller:latest
         image: controller:latest
@@ -103,7 +108,13 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
-        volumeMounts: []
-      volumes: []
+        volumeMounts:
+        - mountPath: /tmp/k8s-fleet-server/serving-certs
+          name: fleet-certs
+          readOnly: true
+      volumes:
+      - name: fleet-certs
+        secret:
+          secretName: fleet-server-cert
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10

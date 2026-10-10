@@ -50,6 +50,12 @@ spec:
         - --metrics-bind-address={{ if .Values.metrics.enabled }}:8443{{ else }}0{{ end }}
         - --fleet-bind-address=:9500
         - --fleet-address={{ include "lameduck.fullname" . }}-fleet.{{ .Release.Namespace }}.svc:9500
+        - --fleet-cert-secret={{ include "lameduck.fleetSecret" . }}
+        - --fleet-cert-path=/tmp/k8s-fleet-server/serving-certs
+        {{- if .Values.fleet.acceptPlaintext }}
+        - --fleet-accept-plaintext
+        {{- end }}
+        - --namespace={{ .Release.Namespace }}
         - --sidecar-image={{ default (include "lameduck.image" .) .Values.sidecar.image }}
         - --sidecar-address={{ .Values.sidecar.address }}
         - --controller-username=system:serviceaccount:{{ .Release.Namespace }}:{{ include "lameduck.serviceAccount" . }}
@@ -104,14 +110,20 @@ spec:
           capabilities:
             drop:
             - ALL
-        {{- if .Values.webhook.enabled }}
         volumeMounts:
+        - name: fleet-cert
+          mountPath: /tmp/k8s-fleet-server/serving-certs
+          readOnly: true
+        {{- if .Values.webhook.enabled }}
         - name: webhook-cert
           mountPath: /tmp/k8s-webhook-server/serving-certs
           readOnly: true
         {{- end }}
-      {{- if .Values.webhook.enabled }}
       volumes:
+      - name: fleet-cert
+        secret:
+          secretName: {{ include "lameduck.fleetSecret" . }}
+      {{- if .Values.webhook.enabled }}
       - name: webhook-cert
         secret:
           secretName: {{ include "lameduck.webhookSecret" . }}

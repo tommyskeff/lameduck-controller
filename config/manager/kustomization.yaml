@@ -1,3 +1,4 @@
 resources:
 - manager.yaml
 - fleet_service.yaml
+- fleet_cert_secret.yaml

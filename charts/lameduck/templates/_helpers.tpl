@@ -34,3 +34,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "lameduck.webhookSecret" -}}
 {{- printf "%s-webhook-cert" (include "lameduck.fullname" .) -}}
 {{- end -}}
+
+{{- define "lameduck.fleetSecret" -}}
+{{- printf "%s-fleet-cert" (include "lameduck.fullname" .) -}}
+{{- end -}}

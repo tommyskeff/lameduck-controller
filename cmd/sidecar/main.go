@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/tommyskeff/lameduck-controller/internal/sidecar"
@@ -21,6 +20,7 @@ import (
 type config struct {
 	listenAddress string
 	fleetAddress  string
+	fleetCA       []byte
 	tokenPath     string
 }
 
@@ -28,6 +28,7 @@ func loadConfig() (config, error) {
 	cfg := config{
 		listenAddress: os.Getenv("LAMEDUCK_SIDECAR_LISTEN_ADDRESS"),
 		fleetAddress:  os.Getenv("LAMEDUCK_FLEET_ADDRESS"),
+		fleetCA:       []byte(os.Getenv("LAMEDUCK_FLEET_CA")),
 		tokenPath:     os.Getenv("LAMEDUCK_TOKEN_PATH"),
 	}
 	if cfg.listenAddress == "" {
@@ -35,6 +36,9 @@ func loadConfig() (config, error) {
 	}
 	if cfg.fleetAddress == "" {
 		return config{}, errors.New("LAMEDUCK_FLEET_ADDRESS is required")
+	}
+	if len(cfg.fleetCA) == 0 {
+		return config{}, errors.New("LAMEDUCK_FLEET_CA is required")
 	}
 	if cfg.tokenPath == "" {
 		return config{}, errors.New("LAMEDUCK_TOKEN_PATH is required")
@@ -53,8 +57,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	fleetCredentials, err := sidecar.FleetCredentials(cfg.fleetCA)
+	if err != nil {
+		log.Error("Invalid fleet certificate authority", "error", err.Error())
+		os.Exit(1)
+	}
 	conn, err := grpc.NewClient(cfg.fleetAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(fleetCredentials),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 20 * time.Second, Timeout: 10 * time.Second}),
 	)
 	if err != nil {

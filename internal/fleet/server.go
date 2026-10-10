@@ -2,22 +2,26 @@ package fleet
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	lameduckv1alpha1 "github.com/tommyskeff/lameduck-controller/api/v1alpha1"
@@ -31,11 +35,14 @@ type Authenticator interface {
 type Server struct {
 	lameduckv1.UnimplementedFleetServiceServer
 
-	Address       string
-	Registry      *Registry
-	Authenticator Authenticator
-	Reader        client.Reader
-	Log           logr.Logger
+	Address           string
+	CertificateDir    string
+	CertificatesReady <-chan struct{}
+	AcceptPlaintext   bool
+	Registry          *Registry
+	Authenticator     Authenticator
+	Reader            client.Reader
+	Log               logr.Logger
 }
 
 func (s *Server) NeedLeaderElection() bool {
@@ -43,24 +50,62 @@ func (s *Server) NeedLeaderElection() bool {
 }
 
 func (s *Server) Start(ctx context.Context) error {
+	select {
+	case <-s.CertificatesReady:
+	case <-ctx.Done():
+		return nil
+	}
+	watcher, err := certwatcher.New(filepath.Join(s.CertificateDir, certificateName), filepath.Join(s.CertificateDir, keyName))
+	if err != nil {
+		return fmt.Errorf("load fleet certificate: %w", err)
+	}
+	watched := make(chan error, 1)
+	go func() {
+		watched <- watcher.Start(ctx)
+	}()
+
 	listener, err := net.Listen("tcp", s.Address)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.Address, err)
 	}
+	transport := credentials.NewTLS(&tls.Config{
+		GetCertificate: watcher.GetCertificate,
+		MinVersion:     tls.VersionTLS13,
+	})
+	if s.AcceptPlaintext {
+		transport = plaintextFallbackCredentials{TransportCredentials: transport}
+	}
 	server := grpc.NewServer(
+		grpc.Creds(transport),
+		grpc.ConnectionTimeout(10*time.Second),
+		grpc.MaxConcurrentStreams(4),
+		grpc.MaxHeaderListSize(32<<10),
+		grpc.MaxRecvMsgSize(64<<10),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}),
 	)
 	lameduckv1.RegisterFleetServiceServer(server, s)
+	failed := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case err := <-watched:
+			if ctx.Err() == nil {
+				failed <- fmt.Errorf("watch fleet certificate: %w", err)
+			}
+		}
 		server.Stop()
 	}()
-	s.Log.Info("Serving fleet", "address", s.Address)
+	s.Log.Info("Serving fleet", "address", s.Address, "acceptPlaintext", s.AcceptPlaintext)
 	if err := server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("serve fleet: %w", err)
 	}
-	return nil
+	select {
+	case err := <-failed:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (s *Server) Connect(stream grpc.BidiStreamingServer[lameduckv1.ConnectRequest, lameduckv1.ConnectResponse]) error {
@@ -124,6 +169,9 @@ func (s *Server) identify(ctx context.Context) (PodIdentity, types.NamespacedNam
 		return PodIdentity{}, types.NamespacedName{}, status.Error(codes.Unauthenticated, "missing bearer token")
 	}
 	identity, err := s.Authenticator.Authenticate(ctx, strings.TrimPrefix(values[0], "Bearer "))
+	if errors.Is(err, ErrReviewsSaturated) || errors.Is(err, ErrSourceThrottled) {
+		return PodIdentity{}, types.NamespacedName{}, status.Error(codes.ResourceExhausted, "authentication throttled")
+	}
 	if err != nil {
 		s.Log.V(1).Info("Rejected sidecar", "reason", err.Error())
 		return PodIdentity{}, types.NamespacedName{}, status.Error(codes.Unauthenticated, "invalid token")

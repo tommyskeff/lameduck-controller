@@ -19,14 +19,23 @@ const (
 	SidecarAddressEnv = "LAMEDUCK_SIDECAR_ADDRESS"
 )
 
+type CertificateAuthority interface {
+	PEM() ([]byte, error)
+}
+
 type PodFactory struct {
 	Scheme         *runtime.Scheme
 	SidecarImage   string
 	SidecarAddress string
 	FleetAddress   string
+	FleetCA        CertificateAuthority
 }
 
 func (f PodFactory) Build(set *lameduckv1alpha1.DrainSet, rev revision.Revision) (*corev1.Pod, error) {
+	fleetCA, err := f.FleetCA.PEM()
+	if err != nil {
+		return nil, fmt.Errorf("load fleet certificate authority: %w", err)
+	}
 	template := rev.Template.DeepCopy()
 	pod := &corev1.Pod{}
 	pod.GenerateName = set.Name + "-"
@@ -63,7 +72,7 @@ func (f PodFactory) Build(set *lameduckv1alpha1.DrainSet, rev revision.Revision)
 			},
 		},
 	})
-	pod.Spec.InitContainers = append([]corev1.Container{f.sidecar()}, pod.Spec.InitContainers...)
+	pod.Spec.InitContainers = append([]corev1.Container{f.sidecar(fleetCA)}, pod.Spec.InitContainers...)
 
 	if err := controllerutil.SetControllerReference(set, pod, f.Scheme); err != nil {
 		return nil, fmt.Errorf("own pod: %w", err)
@@ -71,7 +80,7 @@ func (f PodFactory) Build(set *lameduckv1alpha1.DrainSet, rev revision.Revision)
 	return pod, nil
 }
 
-func (f PodFactory) sidecar() corev1.Container {
+func (f PodFactory) sidecar(fleetCA []byte) corev1.Container {
 	return corev1.Container{
 		Name:          lameduckv1alpha1.SidecarContainerName,
 		Image:         f.SidecarImage,
@@ -80,6 +89,7 @@ func (f PodFactory) sidecar() corev1.Container {
 		Env: []corev1.EnvVar{
 			{Name: "LAMEDUCK_SIDECAR_LISTEN_ADDRESS", Value: f.SidecarAddress},
 			{Name: "LAMEDUCK_FLEET_ADDRESS", Value: f.FleetAddress},
+			{Name: "LAMEDUCK_FLEET_CA", Value: string(fleetCA)},
 			{Name: "LAMEDUCK_TOKEN_PATH", Value: sidecarTokenDir + "/token"},
 		},
 		VolumeMounts: []corev1.VolumeMount{{
