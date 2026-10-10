@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/clock"
@@ -94,7 +95,7 @@ func (r *DrainSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := set.Spec.ValidateSelector(); err != nil {
 		return ctrl.Result{RequeueAfter: invalidRequeue}, r.markInvalidSelector(ctx, &set, err)
 	}
-	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
+	selector, err := scaleSelector(&set)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -126,7 +127,7 @@ func (r *DrainSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if pod.DeletionTimestamp != nil {
 			continue
 		}
-		if reason := r.removalReason(state, pod); reason != "" {
+		if reason := r.removalReason(ctx, state, pod); reason != "" {
 			if err := r.deletePod(ctx, state, pod, reason); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -191,16 +192,20 @@ func (r *DrainSetReconciler) listPods(ctx context.Context, set *lameduckv1alpha1
 	return pods, nil
 }
 
-func (r *DrainSetReconciler) removalReason(state *reconcileState, pod *corev1.Pod) string {
+func (r *DrainSetReconciler) removalReason(ctx context.Context, state *reconcileState, pod *corev1.Pod) string {
 	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 		return "Finished"
 	}
 	if _, ok := pod.Annotations[lameduckv1alpha1.AnnotationTerminate]; ok {
 		return "Terminated"
 	}
-	drain := readDrain(pod)
+	drain, repaired := readRepairedDrain(pod, r.timeouts(state.set), state.now)
 	if drain == nil {
 		return ""
+	}
+	if repaired {
+		logf.FromContext(ctx).Info("Repaired unreadable drain annotations", "pod", pod.Name,
+			"started", drain.Started, "deadline", drain.Deadline)
 	}
 	if r.Registry.Report(pod.UID).Drained {
 		return "Drained"
@@ -242,7 +247,7 @@ func (r *DrainSetReconciler) applyDrainRequests(state *reconcileState) {
 			Started:  state.now,
 			Deadline: state.now.Add(r.timeouts(state.set)[reason]),
 		}
-		if existing := readDrain(pod); existing != nil {
+		if existing, _ := readRepairedDrain(pod, r.timeouts(state.set), state.now); existing != nil {
 			drain.Started = existing.Started
 			drain.Deadline = minTime(existing.Deadline, drain.Deadline)
 		}
@@ -258,11 +263,13 @@ func (r *DrainSetReconciler) plannerInput(state *reconcileState) planner.Input {
 	if maxSurge == 0 && maxUnavailable == 0 {
 		maxSurge = 1
 	}
+	timeouts := r.timeouts(set)
 	staleAfter := durationOr(set.Spec.VictimSelection.Load.StaleAfter, 30*time.Second)
 
 	pods := make([]planner.Pod, 0, len(state.desired))
 	for _, pod := range sortedPods(state.desired) {
 		ready, available, pending := r.readiness(set, pod, state.now)
+		drain, _ := readRepairedDrain(pod, timeouts, state.now)
 		if pending > 0 {
 			state.requeue = min(state.requeue, pending)
 		}
@@ -272,7 +279,7 @@ func (r *DrainSetReconciler) plannerInput(state *reconcileState) planner.Input {
 			Created:   pod.CreationTimestamp.Time,
 			Ready:     ready,
 			Available: available,
-			Drain:     readDrain(pod),
+			Drain:     drain,
 		}
 		report := r.Registry.Report(pod.UID)
 		if report.Load != nil && (report.Connected || state.now.Sub(report.LoadAt) <= staleAfter) {
@@ -304,7 +311,7 @@ func (r *DrainSetReconciler) plannerInput(state *reconcileState) planner.Input {
 		Order:            set.Spec.VictimSelection.Order,
 		CancelOnRollback: ptr.Deref(set.Spec.Drain.CancelOn.Rollback, true),
 		CancelOnScaleUp:  ptr.Deref(set.Spec.Drain.CancelOn.ScaleUp, true),
-		Timeouts:         r.timeouts(set),
+		Timeouts:         timeouts,
 		OutdatedRouting:  set.Spec.Routing.OutdatedPods,
 		CurrentThreshold: scaled(set.Spec.Routing.CurrentThreshold, replicas, true),
 		AllowRollout:     !set.Spec.Paused,
@@ -555,6 +562,22 @@ func (r *DrainSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WatchesRawSource(source.Channel(r.Registry.Events(), &handler.EnqueueRequestForObject{})).
 		Named("drainset").
 		Complete(r)
+}
+
+func scaleSelector(set *lameduckv1alpha1.DrainSet) (labels.Selector, error) {
+	selector, err := metav1.LabelSelectorAsSelector(set.Spec.Selector)
+	if err != nil {
+		return nil, fmt.Errorf("parse selector: %w", err)
+	}
+	notDraining, err := labels.NewRequirement(
+		lameduckv1alpha1.LabelPhase,
+		selection.NotEquals,
+		[]string{string(lameduckv1alpha1.PodPhaseDraining)},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build phase requirement: %w", err)
+	}
+	return selector.Add(*notDraining), nil
 }
 
 func sortedPods(pods map[string]*corev1.Pod) []*corev1.Pod {

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
@@ -59,6 +61,7 @@ type config struct {
 	fleetAddress         string
 	sidecarImage         string
 	sidecarAddress       string
+	sidecarPort          int32
 	controllerUsername   string
 	zap                  zap.Options
 }
@@ -82,7 +85,8 @@ func loadConfig() (config, error) {
 	flag.StringVar(&cfg.fleetBindAddress, "fleet-bind-address", ":9500", "Address the fleet gRPC server listens on.")
 	flag.StringVar(&cfg.fleetAddress, "fleet-address", "", "Address sidecars dial to reach the fleet server.")
 	flag.StringVar(&cfg.sidecarImage, "sidecar-image", "", "Image injected as the sidecar.")
-	flag.StringVar(&cfg.sidecarAddress, "sidecar-address", "127.0.0.1:9450", "Sidecar SDK address in each pod.")
+	flag.StringVar(&cfg.sidecarAddress, "sidecar-address",
+		fmt.Sprintf("127.0.0.1:%d", lameduckv1alpha1.DefaultSidecarPort), "Sidecar SDK address in each pod.")
 	flag.StringVar(&cfg.controllerUsername, "controller-username", "", "Username exempt from delete protection.")
 	cfg.zap = zap.Options{Development: true}
 	cfg.zap.BindFlags(flag.CommandLine)
@@ -94,6 +98,15 @@ func loadConfig() (config, error) {
 	if cfg.sidecarImage == "" {
 		return config{}, errors.New("--sidecar-image is required")
 	}
+	_, port, err := net.SplitHostPort(cfg.sidecarAddress)
+	if err != nil {
+		return config{}, fmt.Errorf("--sidecar-address is invalid: %w", err)
+	}
+	sidecarPort, err := strconv.ParseInt(port, 10, 32)
+	if err != nil {
+		return config{}, fmt.Errorf("--sidecar-address port is invalid: %w", err)
+	}
+	cfg.sidecarPort = int32(sidecarPort)
 	if cfg.webhookSecret != "" {
 		if cfg.webhookCertPath == "" || cfg.webhookService == "" || cfg.webhookConfiguration == "" || cfg.namespace == "" {
 			return config{}, errors.New(
@@ -249,7 +262,8 @@ func addCertRotator(mgr manager.Manager, cfg config, ready chan struct{}) error 
 }
 
 func registerWebhooks(mgr manager.Manager, cfg config) error {
-	if err := admission.SetupDrainSetValidator(mgr); err != nil {
+	validator := &admission.DrainSetValidator{SidecarPort: cfg.sidecarPort}
+	if err := admission.SetupDrainSetValidator(mgr, validator); err != nil {
 		return fmt.Errorf("set up drainset validator: %w", err)
 	}
 	server := mgr.GetWebhookServer()

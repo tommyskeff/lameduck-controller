@@ -14,6 +14,10 @@ const (
 
 	SidecarTokenAudience = "lameduck.tommyjs.dev"
 
+	SidecarContainerName       = "lameduck-sidecar"
+	SidecarTokenVolume         = "lameduck-token"
+	DefaultSidecarPort   int32 = 9450
+
 	ConditionAvailable   = "Available"
 	ConditionProgressing = "Progressing"
 )
