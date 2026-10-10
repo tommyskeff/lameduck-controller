@@ -22,7 +22,7 @@ const (
 	DeletePath   = "/validate-pod-delete"
 )
 
-// +kubebuilder:webhook:path=/validate-pod-eviction,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods/eviction,verbs=create,versions=v1,name=pod-eviction.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
+// +kubebuilder:webhook:path=/validate-pod-eviction,mutating=false,failurePolicy=fail,sideEffects=NoneOnDryRun,groups="",resources=pods/eviction,verbs=create,versions=v1,name=pod-eviction.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
 // +kubebuilder:webhook:path=/validate-pod-delete,mutating=false,failurePolicy=ignore,sideEffects=NoneOnDryRun,groups="",resources=pods,verbs=delete,versions=v1,name=pod-delete.lameduck.tommyjs.dev,admissionReviewVersions=v1,timeoutSeconds=5
 
 type DisruptionHandler struct {
@@ -110,9 +110,11 @@ func (h *DisruptionHandler) owner(ctx context.Context, pod *corev1.Pod) (*lamedu
 }
 
 func (h *DisruptionHandler) trusted(username string) bool {
-	return username == h.ControllerUsername ||
-		strings.HasPrefix(username, "system:serviceaccount:kube-system:") ||
-		strings.HasPrefix(username, "system:node:")
+	if username == h.ControllerUsername {
+		return true
+	}
+	return !h.Eviction && (strings.HasPrefix(username, "system:serviceaccount:kube-system:") ||
+		strings.HasPrefix(username, "system:node:"))
 }
 
 func (h *DisruptionHandler) requestDrain(ctx context.Context, req admission.Request, pod *corev1.Pod, reason lameduckv1alpha1.DrainReason) error {

@@ -18,6 +18,9 @@ crd:
 webhook:
   enabled: true
   podFailurePolicy: Ignore
+  eviction:
+    failurePolicy: Fail
+    namespaceSelector: {}
   certManager:
     enabled: false
     issuerRef: {}
