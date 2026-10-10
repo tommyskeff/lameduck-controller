@@ -137,8 +137,15 @@ func main() {
 		metricsOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
+	cacheOptions, err := controller.CacheOptions()
+	if err != nil {
+		setupLog.Error(err, "Failed to build cache options")
+		os.Exit(1)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                        scheme,
+		Cache:                         cacheOptions,
 		Metrics:                       metricsOptions,
 		WebhookServer:                 webhook.NewServer(webhookOptions),
 		HealthProbeBindAddress:        cfg.probeAddr,
