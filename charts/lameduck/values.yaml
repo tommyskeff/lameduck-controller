@@ -27,6 +27,10 @@ webhook:
 
 metrics:
   enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
 
 resources:
   requests:

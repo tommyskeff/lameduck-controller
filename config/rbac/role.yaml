@@ -35,6 +35,13 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - lameduck.tommyjs.dev
   resources:
   - drainsets

@@ -81,3 +81,17 @@ func TestRetainForgetsDeletedPods(t *testing.T) {
 		t.Fatal("retained pod lost its session")
 	}
 }
+
+func TestConnectedSidecarsCountsOpenSessions(t *testing.T) {
+	registry := NewRegistry(clocktesting.NewFakeClock(time.Now()))
+	other := types.NamespacedName{Namespace: "games", Name: "skywars"}
+	registry.Attach("pod-a", set)
+	session := registry.Attach("pod-b", set)
+	registry.Attach("pod-c", other)
+	registry.Publish("pod-d", set, draining())
+	registry.Detach(session)
+	counts := registry.ConnectedSidecars()
+	if counts[set] != 1 || counts[other] != 1 || len(counts) != 2 {
+		t.Fatalf("counts = %v", counts)
+	}
+}

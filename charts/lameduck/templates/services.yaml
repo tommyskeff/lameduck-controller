@@ -39,6 +39,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "lameduck.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
 spec:
   ports:
   - name: https
