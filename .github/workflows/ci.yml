@@ -55,8 +55,11 @@ jobs:
         run: |
           kubectl -n lameduck-system get pods -o wide
           kubectl -n lameduck-system logs -l app.kubernetes.io/instance=lameduck --all-containers --prefix --tail=-1
-          kubectl -n lameduck-e2e get pods -o yaml
-          kubectl -n lameduck-e2e logs -l app=drain-app --all-containers --prefix --tail=-1
+          for namespace in $(kubectl get namespaces -l e2e=lameduck -o name | cut -d/ -f2); do
+            kubectl -n "$namespace" get events --sort-by=.lastTimestamp
+            kubectl -n "$namespace" get pods -o yaml
+            kubectl -n "$namespace" logs -l app=e2e-app --all-containers --prefix --tail=-1
+          done
 
   chart:
     runs-on: ubuntu-latest
