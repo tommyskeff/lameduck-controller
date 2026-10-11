@@ -544,3 +544,42 @@ func TestExpectationsGuardStaleCache(t *testing.T) {
 		t.Fatalf("reconcile on a stale cache left %d pods, want 2", created)
 	}
 }
+
+func TestReconcileStopsQuietlyInTerminatingNamespace(t *testing.T) {
+	f := newEnvtestFixture(t)
+	set := f.createSet(t, 1, nil)
+	reconciler := f.reconciler(f.client, events.NewFakeRecorder(100))
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(set)}
+	ctx := context.Background()
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	pods := f.pods(t)
+	if len(pods) != 1 {
+		t.Fatalf("first reconcile created %d pods, want 1", len(pods))
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("reconcile observing the pod: %v", err)
+	}
+
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: f.namespace}}
+	if err := f.client.Delete(ctx, namespace); err != nil {
+		t.Fatalf("delete namespace: %v", err)
+	}
+	if err := f.client.Delete(ctx, &pods[0], client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	eventually(t, "the pod is gone", func() bool { return len(f.pods(t)) == 0 })
+
+	result, err := reconciler.Reconcile(ctx, request)
+	if err != nil {
+		t.Fatalf("reconcile in a terminating namespace: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("reconcile in a terminating namespace requeued after %s", result.RequeueAfter)
+	}
+	if created := len(f.pods(t)); created != 0 {
+		t.Fatalf("reconcile in a terminating namespace created %d pods", created)
+	}
+}

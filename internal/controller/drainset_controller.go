@@ -75,6 +75,15 @@ type reconcileState struct {
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 func (r *DrainSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	result, err := r.reconcile(ctx, req)
+	if apierrors.HasStatusCause(err, corev1.NamespaceTerminatingCause) {
+		logf.FromContext(ctx).V(1).Info("Namespace is terminating; waiting for the set to be deleted")
+		return ctrl.Result{}, nil
+	}
+	return result, err
+}
+
+func (r *DrainSetReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var set lameduckv1alpha1.DrainSet
 	if err := r.Client.Get(ctx, req.NamespacedName, &set); err != nil {
 		if apierrors.IsNotFound(err) {
